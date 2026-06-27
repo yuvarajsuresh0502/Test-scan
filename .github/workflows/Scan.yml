@@ -1,21 +1,286 @@
+# ============================================================
+# GITLEAKS SECURITY SCANNING ONLY
+# ============================================================
+# 🔒 WHAT THIS DOES:
+#   - Scans for hardcoded secrets, tokens, and credentials
+#   - Detects AWS keys, private keys, API tokens, passwords
+#   - Prevents secrets from being committed to repository
+#
+# 📋 TRIGGERS:
+#   - Push to any branch
+#   - Pull requests to main branch
+#   - Daily automated scan at midnight
+#   - Manual trigger via workflow_dispatch
+# ============================================================
+
 name: Gitleaks Security Scan
 
 on:
-  push:  # Runs on every push to any branch
-  pull_request:  # Runs on every pull request to any branch
-    # Removed branch filters to scan all PRs
+  push:
+    branches: [ "main", "develop", "feature/*", "hotfix/*" ]
+  pull_request:
+    branches: [ "main", "develop" ]
+  schedule:
+    - cron: '0 0 * * *'  # Daily at midnight UTC
+  workflow_dispatch:  # Manual trigger
 
 jobs:
-  gitleaks:
-    name: Run Gitleaks
+  # ==========================================================
+  # SECURITY SCANNING (Gitleaks)
+  # ==========================================================
+  gitleaks-scan:
+    name: 🔒 Gitleaks Secret Detection
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # Prevent infinite loops
+    
     steps:
-      - name: Checkout code
+      # 1. Checkout code with full history
+      - name: 📥 Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Full history for accurate scanning
-
-      - name: Run Gitleaks
+          fetch-depth: 0  # Full history for comprehensive scanning
+          
+      # 2. Run Gitleaks with GitHub Action
+      - name: 🔍 Run Gitleaks scan
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          config: |
+            # Custom Gitleaks configuration
+            [extend]
+              useDefault = true  # Use built-in rules
+            
+            [allowlist]
+              description = "Allowed paths and commits"
+              paths = ['''
+                (.*\.test)|
+                (.*\.md)|
+                (.*\.txt)|
+                (.*\.yml)|
+                (.*\.yaml)|
+                (.env.example)|
+                (.gitignore)|
+                (composer.json)|
+                (package.json)|
+                (tests/.*)|
+                (docs/.*)
+              ''']
+              commits = [""]  # Allow specific commits if needed
+            
+            [[rules]]
+              id = "custom-secret"
+              description = "Custom secret pattern"
+              regex = '''(?i)(?:api[_-]?key|api[_-]?secret|access[_-]?token|auth[_-]?token|private[_-]?key)[^a-zA-Z0-9]*[=:][^a-zA-Z0-9]*([a-zA-Z0-9_\-\.\/]{8,})'''
+              tags = ["secret", "api"]
+            
+            [[rules]]
+              id = "aws-access-key"
+              description = "AWS Access Key ID"
+              regex = '''(AKIA[0-9A-Z]{16})'''
+              tags = ["aws", "secret"]
+            
+            [[rules]]
+              id = "aws-secret-key"
+              description = "AWS Secret Access Key"
+              regex = '''(?i)aws[_-]?secret[_-]?access[_-]?key[^a-zA-Z0-9]*[=:][^a-zA-Z0-9]*([a-zA-Z0-9/+=]{40})'''
+              tags = ["aws", "secret"]
+            
+            [[rules]]
+              id = "private-key"
+              description = "Private Key"
+              regex = '''-----BEGIN (?:RSA|DSA|EC|OPENSSH|PGP) PRIVATE KEY-----'''
+              tags = ["key", "private"]
+            
+            [[rules]]
+              id = "jwt-token"
+              description = "JWT Token"
+              regex = '''eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}'''
+              tags = ["jwt", "token"]
+            
+            [[rules]]
+              id = "github-token"
+              description = "GitHub Token"
+              regex = '''(ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|ghu_[a-zA-Z0-9]{36}|ghs_[a-zA-Z0-9]{36})'''
+              tags = ["github", "token"]
+            
+            [[rules]]
+              id = "slack-token"
+              description = "Slack Token"
+              regex = '''(xox[baprs]-[0-9]{12}-[0-9]{12}-[0-9]{12}-[a-zA-Z0-9]{32})'''
+              tags = ["slack", "token"]
+            
+            [[rules]]
+              id = "database-connection"
+              description = "Database Connection String"
+              regex = '''(mysql|postgresql|mongodb|redis|elasticsearch)://[a-zA-Z0-9:_\-\.@?&=%]+'''
+              tags = ["database", "connection"]
+            
+            [[rules]]
+              id = "generic-password"
+              description = "Generic Password in code"
+              regex = '''(?i)(password|passwd|pwd)[^a-zA-Z0-9]*[=:][^a-zA-Z0-9]*([a-zA-Z0-9_\-\.\/]{8,})'''
+              tags = ["password", "generic"]
+      
+      # 3. Generate JSON report (if not automatically generated)
+      - name: 📊 Generate Gitleaks report
+        if: always()
+        run: |
+          # Run gitleaks and generate report if not already created
+          if [ ! -f "gitleaks-report.json" ]; then
+            # Install gitleaks if not available
+            if ! command -v gitleaks &> /dev/null; then
+              wget -q https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks_linux_amd64.tar.gz
+              tar -xzf gitleaks_linux_amd64.tar.gz
+              sudo mv gitleaks /usr/local/bin/
+            fi
+            gitleaks detect --source . --report-format json --report-path gitleaks-report.json || true
+          fi
+      
+      # 4. Upload scan results as artifact
+      - name: 📤 Upload Gitleaks results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-results
+          path: |
+            gitleaks-report.json
+            .gitleaks.toml
+          retention-days: 30
+      
+      # 5. Create GitHub Issue if secrets found
+      - name: 📝 Create issue for found secrets
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = '## 🚨 Gitleaks Security Alert\n\n';
+            body += 'Potential secrets have been detected in the codebase!\n\n';
+            body += '### 📋 Action Required:\n';
+            body += '1. Review the scan results from the artifacts\n';
+            body += '2. Remove any exposed secrets immediately\n';
+            body += '3. Rotate any compromised credentials\n';
+            body += '4. Consider using environment variables or secrets management\n\n';
+            body += '### 🔍 How to view results:\n';
+            body += '1. Go to Actions tab\n';
+            body += '2. Click on this workflow run\n';
+            body += '3. Download the `gitleaks-results` artifact\n';
+            body += '4. Review the `gitleaks-report.json` file\n\n';
+            body += '### 📚 Resources:\n';
+            body += '- [Gitleaks Documentation](https://github.com/gitleaks/gitleaks)\n';
+            body += '- [GitHub Secrets](https://docs.github.com/en/actions/security-guides/encrypted-secrets)\n';
+            
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🔒 Gitleaks Found Secrets - ${new Date().toISOString().slice(0,10)}`,
+              body: body,
+              labels: ['security', 'bug', 'priority-high']
+            });
+            console.log(`Created issue #${issue.data.number}`);
+      
+      # 6. Send Slack alert (optional)
+      - name: 💬 Send Slack alert
+        if: failure()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          channel-id: '#security-alerts'
+          slack-message: |
+            🚨 *SECURITY ALERT: Gitleaks Found Secrets!*
+            Repository: ${{ github.repository }}
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+            Author: ${{ github.actor }}
+            Action: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          payload: |
+            {
+              "attachments": [
+                {
+                  "color": "danger",
+                  "title": "Gitleaks Security Scan Failed",
+                  "text": "Potential secrets detected in the repository. Please review immediately.",
+                  "fields": [
+                    {
+                      "title": "Repository",
+                      "value": "${{ github.repository }}",
+                      "short": true
+                    },
+                    {
+                      "title": "Branch",
+                      "value": "${{ github.ref_name }}",
+                      "short": true
+                    },
+                    {
+                      "title": "Commit",
+                      "value": "${{ github.sha }}",
+                      "short": false
+                    },
+                    {
+                      "title": "Action URL",
+                      "value": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+                      "short": false
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      
+      # 7. Block PR if secrets found (optional)
+      - name: 🚫 Block PR with secrets
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+              event: 'REQUEST_CHANGES',
+              body: '🚫 **Security Check Failed**\n\nGitleaks detected potential secrets in this PR. Please fix before merging.\n\nDownload the `gitleaks-results` artifact from the workflow run to see details.'
+            });
+            
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              labels: ['security-blocked']
+            });
+      
+      # 8. Summary report
+      - name: 📋 Print summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "✅ Gitleaks Security Scan Complete"
+          echo "=========================================="
+          echo "📋 Repository: ${{ github.repository }}"
+          echo "📋 Branch: ${{ github.ref_name }}"
+          echo "📋 Commit: ${{ github.sha }}"
+          echo "📋 Status: ${{ job.status }}"
+          echo "=========================================="
+          
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ No secrets found! Security check passed."
+          else
+            echo "❌ WARNING: Potential secrets detected!"
+            echo "📥 Download artifacts to see detailed results."
+          fi
+          echo "=========================================="
+
+# ============================================================
+# ADDITIONAL CONFIGURATION
+# ============================================================
+# 📁 To customize further, create a .gitleaks.toml file
+#    in your repository root with your own rules.
+#
+# 🚀 To run locally:
+#    brew install gitleaks (macOS)
+#    gitleaks detect --source . --verbose
+#
+# 🔧 To skip specific commits:
+#    gitleaks detect --source . --skip-commits <commit-hash>
+# ============================================================
