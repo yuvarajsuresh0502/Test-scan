@@ -117,7 +117,7 @@ jobs:
           [[rules]]
           id = "python-database-url"
           description = "Python Database URL"
-          regex = '''(?:postgresql|mysql|sqlite|mongodb|redis)://[a-zA-Z0-9_\-]+:[^@]+@[a-zA-Z0-9_\-\.]+''',
+          regex = '''(?:postgresql|mysql|sqlite|mongodb|redis)://[a-zA-Z0-9_\-]+:[^@]+@[a-zA-Z0-9_\-\.]+'''
           tags = ["python", "database", "credentials"]
           
           [[rules]]
@@ -431,55 +431,12 @@ jobs:
             } catch (error) {
               console.error('Error blocking PR:', error);
             }
-      
-      # 9. Send Slack notification (optional)
-      - name: 📢 Send Slack notification
-        if: always() && secrets.SLACK_WEBHOOK != ''
-        uses: slackapi/slack-github-action@v1.24.0
-        with:
-          payload: |
-            {
-              "text": "${{ job.status == 'success' ? '✅' : '❌' }} Gitleaks Scan: ${{ job.status }}",
-              "blocks": [
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "${{ job.status == 'success' ? '✅' : '❌' }} *Gitleaks Security Scan*"
-                  }
-                },
-                {
-                  "type": "section",
-                  "fields": [
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Status:*\n${{ job.status }}"
-                    },
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Repository:*\n${{ github.repository }}"
-                    },
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Branch:*\n${{ github.ref_name }}"
-                    },
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Trigger:*\n${{ github.event_name }}"
-                    }
-                  ]
-                }
-              ]
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
 
   # ==========================================================
-  # JOB 2: SUMMARY & ALERTS
+  # JOB 2: SUMMARY & NOTIFICATIONS (FIXED)
   # ==========================================================
   summary:
-    name: 📊 Summary & Alerts
+    name: 📊 Summary & Notifications
     runs-on: ubuntu-latest
     needs: gitleaks-scan
     if: always()
@@ -495,7 +452,7 @@ jobs:
             echo "### ✅ All security checks passed!" >> $GITHUB_STEP_SUMMARY
             echo "🔒 No secrets found in repository." >> $GITHUB_STEP_SUMMARY
             echo "📊 Full report available in artifacts." >> $GITHUB_STEP_SUMMARY
-            exit 0
+            echo "STATUS=success" >> $GITHUB_ENV
           else
             echo "### ❌ Security issues found!" >> $GITHUB_STEP_SUMMARY
             echo "🚨 Potential secrets detected in your code." >> $GITHUB_STEP_SUMMARY
@@ -505,10 +462,61 @@ jobs:
             echo "2. Remove all hardcoded secrets from code" >> $GITHUB_STEP_SUMMARY
             echo "3. Use environment variables or secrets management" >> $GITHUB_STEP_SUMMARY
             echo "4. Rotate any exposed credentials immediately" >> $GITHUB_STEP_SUMMARY
+            echo "STATUS=failure" >> $GITHUB_ENV
             exit 1
           fi
       
-      # 2. Send email alert (optional)
+      # 2. Send Slack notification (FIXED)
+      - name: 📢 Send Slack notification
+        if: always() && secrets.SLACK_WEBHOOK != ''
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "${{ needs.gitleaks-scan.result == 'success' && '✅' || '❌' }} Gitleaks Scan: ${{ needs.gitleaks-scan.result }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "${{ needs.gitleaks-scan.result == 'success' && '✅' || '❌' }} *Gitleaks Security Scan*"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Status:*\n${{ needs.gitleaks-scan.result }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Repository:*\n${{ github.repository }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Branch:*\n${{ github.ref_name }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Trigger:*\n${{ github.event_name }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "🔗 <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+      
+      # 3. Send email alert (optional)
       - name: 📧 Send email alert
         if: failure() && secrets.EMAIL_TO != ''
         uses: dawidd6/action-send-mail@v3
