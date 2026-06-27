@@ -1,11 +1,10 @@
 # ============================================================
-# COMPLETE PHP CI/CD PIPELINE with GITLEAKS SECURITY SCANNING
+# PHP TESTING & SECURITY SCANNING PIPELINE
 # ============================================================
 # 🔧 WHAT THIS DOES:
 #   - 🔒 Gitleaks: Scans for hardcoded secrets/tokens in code
-#   - 🏗️ Build: Installs dependencies and builds the application
 #   - 🧪 Test: Runs PHPUnit/Pest tests with coverage
-#   - 🚀 Deploy: Deploys to server on successful test
+#   - 📊 Code Quality: PHPStan & PHPCS checks
 #
 # 📋 TRIGGERS:
 #   - Push to main, develop, and feature branches
@@ -13,7 +12,7 @@
 #   - Manual trigger via workflow_dispatch
 # ============================================================
 
-name: PHP CI/CD Pipeline with Security Scanning
+name: PHP Testing & Security Scan
 
 on:
   push:
@@ -64,7 +63,7 @@ jobs:
               regex = '''-----BEGIN (?:RSA|DSA|EC|OPENSSH) PRIVATE KEY-----'''
               tags = ["key", "private"]
       
-      # 3. Upload scan results (optional)
+      # 3. Upload scan results
       - name: Upload Gitleaks results
         if: always()
         uses: actions/upload-artifact@v4
@@ -72,7 +71,7 @@ jobs:
           name: gitleaks-results
           path: gitleaks-report.json
       
-      # 4. Send notification if secrets found
+      # 4. Send alert if secrets found
       - name: Send alert if secrets found
         if: failure()
         run: |
@@ -81,17 +80,16 @@ jobs:
           exit 1
 
   # ==========================================================
-  # JOB 2: BUILD & TEST
+  # JOB 2: PHP TESTS & CODE QUALITY
   # ==========================================================
-  build-and-test:
-    name: 🏗️ Build & Test
+  test:
+    name: 🧪 PHP Tests & Code Quality
     runs-on: ubuntu-latest
     needs: security-scan  # Runs only if security scan passes
     
     strategy:
       matrix:
-        php-versions: ['8.2']  # Test against multiple PHP versions
-        dependency-versions: ['locked']  # Test with locked and latest deps
+        php-versions: ['8.1', '8.2']  # Test against multiple PHP versions
     
     services:
       mysql:
@@ -134,22 +132,16 @@ jobs:
           path: |
             vendor/
             ~/.cache/composer
-          key: ${{ runner.os }}-php${{ matrix.php-versions }}-${{ matrix.dependency-versions }}-composer-${{ hashFiles('composer.lock') }}
+          key: ${{ runner.os }}-php${{ matrix.php-versions }}-composer-${{ hashFiles('composer.lock') }}
           restore-keys: |
-            ${{ runner.os }}-php${{ matrix.php-versions }}-${{ matrix.dependency-versions }}-composer-
             ${{ runner.os }}-php${{ matrix.php-versions }}-composer-
             ${{ runner.os }}-composer-
       
       # 5. Install dependencies
       - name: Install dependencies
-        run: |
-          if [ "${{ matrix.dependency-versions }}" == "latest" ]; then
-            composer update --prefer-dist --no-progress
-          else
-            composer install --prefer-dist --no-progress --no-suggest
-          fi
+        run: composer install --prefer-dist --no-progress --no-suggest
       
-      # 6. Create environment file
+      # 6. Create environment file for testing
       - name: Setup environment
         run: |
           if [ -f ".env.example" ]; then
@@ -185,21 +177,30 @@ jobs:
       - name: Run PHPStan
         run: |
           if [ -f "./vendor/bin/phpstan" ]; then
-            ./vendor/bin/phpstan analyse app/ src/ --level=5 --no-progress || true
+            ./vendor/bin/phpstan analyse app/ src/ --level=5 --no-progress
           else
             echo "PHPStan not installed, skipping..."
           fi
       
-      # 9. Run code style check
-      - name: Run PHPCS
+      # 9. Run code style check (PHPCS)
+      - name: Run PHP Code Sniffer
         run: |
           if [ -f "./vendor/bin/phpcs" ]; then
-            ./vendor/bin/phpcs --standard=PSR12 app/ src/ --ignore=vendor/ --report=summary || true
+            ./vendor/bin/phpcs --standard=PSR12 app/ src/ --ignore=vendor/ --report=summary
           else
             echo "PHPCS not installed, skipping..."
           fi
       
-      # 10. Run tests with coverage
+      # 10. Run PHP Mess Detector (PHPMD) - Optional
+      - name: Run PHPMD
+        run: |
+          if [ -f "./vendor/bin/phpmd" ]; then
+            ./vendor/bin/phpmd app/ text cleancode,codesize,controversial,design,naming,unusedcode || true
+          else
+            echo "PHPMD not installed, skipping..."
+          fi
+      
+      # 11. Run tests with coverage
       - name: Run PHPUnit tests
         run: |
           if [ -f "./vendor/bin/phpunit" ]; then
@@ -211,7 +212,7 @@ jobs:
             exit 1
           fi
       
-      # 11. Upload test coverage
+      # 12. Upload test coverage to Codecov
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3
         with:
@@ -220,35 +221,101 @@ jobs:
           name: codecov-umbrella
           fail_ci_if_error: false
       
-      # 12. Upload test results
+      # 13. Upload test results as artifacts
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-php${{ matrix.php-versions }}-${{ matrix.dependency-versions }}
+          name: test-results-php${{ matrix.php-versions }}
           path: |
             coverage-report/
             tests/_output/
             *.xml
       
-      # 13. Build production assets (for frontend)
-      - name: Build assets
+      # 14. Check test coverage percentage
+      - name: Check coverage threshold
         run: |
-          if [ -f "package.json" ]; then
-            npm ci --no-audit --no-fund
-            npm run build || echo "No build script found"
+          if [ -f "./coverage.xml" ]; then
+            COVERAGE=$(grep -o 'line-rate="[0-9.]*"' coverage.xml | head -1 | cut -d'"' -f2)
+            COVERAGE_PERCENT=$(echo "$COVERAGE * 100" | bc)
+            echo "📊 Test coverage: $COVERAGE_PERCENT%"
+            
+            THRESHOLD=80
+            if (( $(echo "$COVERAGE_PERCENT < $THRESHOLD" | bc -l) )); then
+              echo "⚠️ Coverage is below $THRESHOLD% threshold!"
+              exit 1
+            else
+              echo "✅ Coverage is above $THRESHOLD% threshold"
+            fi
           fi
-      
-      # 14. Create build artifact
-      - name: Archive build
-        uses: actions/upload-artifact@v4
+        continue-on-error: true  # Don't fail the build for coverage
+
+  # ==========================================================
+  # JOB 3: NOTIFICATIONS (Optional)
+  # ==========================================================
+  notifications:
+    name: 📢 Notifications
+    runs-on: ubuntu-latest
+    needs: test
+    if: always()
+    
+    steps:
+      # 1. Send status notification
+      - name: Send GitHub status check
+        uses: actions/github-script@v6
         with:
-          name: build-artifact
-          path: |
-            ./
-            !vendor/
-            !node_modules/
-            !tests/
-            !*.log
-            !.env
-          retention-days: 7
+          script: |
+            const status = '${{ needs.test.result }}';
+            const emoji = status === 'success' ? '✅' : '❌';
+            const message = `${emoji} Tests ${
+              status === 'success' ? 'passed' : 'failed'
+            } for ${process.env.GITHUB_REF_NAME}`;
+            
+            console.log(message);
+            
+            // Create status check
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: status === 'success' ? 'success' : 'failure',
+              context: 'PHP Tests & Security Scan',
+              description: status === 'success' ? 'All tests passed!' : 'Tests failed!',
+            });
+      
+      # 2. Send Slack notification (if configured)
+      - name: Send Slack notification
+        if: success() && secrets.SLACK_WEBHOOK != ''
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          channel-id: '#ci-cd'
+          slack-message: |
+            ✅ Tests passed! 
+            📦 Repository: ${{ github.repository }}
+            🌿 Branch: ${{ github.ref_name }}
+            👤 Author: ${{ github.actor }}
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        continue-on-error: true
+      
+      # 3. Send email notification (if configured)
+      - name: Send email notification
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "❌ Test Failed: ${{ github.repository }}"
+          to: ${{ secrets.NOTIFICATION_EMAIL }}
+          from: GitHub Actions
+          body: |
+            Tests failed for repository: ${{ github.repository }}
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+            Author: ${{ github.actor }}
+            
+            Check the GitHub Actions for details:
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        continue-on-error: true
