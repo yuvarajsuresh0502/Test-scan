@@ -4,4 +4,4 @@ SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsImV4YW1wbGUiOnRydWV9.test_anon_key
 OPENAI_API_KEY=sk-test1234567890abcdefghijklmnopqrstuvwxyz
 DATABASE_URL=postgresql://test:test123@localhost:5432/testdb
 API_SECRET_PASSWORD=supersecret_test_password
-COPILOT_OPENROUTER_API_KEY=sk-or-v1-1234567890abcdefghijklmnopqrstuvwxya
+COPILOT_OPENROUTER_API_KEY=sk-or-v1-1234567890abcdefghijklmnopqrstuvwxyahdhd
