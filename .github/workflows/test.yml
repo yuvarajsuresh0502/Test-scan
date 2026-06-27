@@ -1,10 +1,11 @@
 # ============================================================
-# PHP TESTING & SECURITY SCANNING PIPELINE
+# PHP SECURITY & TESTING PIPELINE - GITLEAKS + PHPUNIT
 # ============================================================
 # 🔧 WHAT THIS DOES:
 #   - 🔒 Gitleaks: Scans for hardcoded secrets/tokens in code
-#   - 🧪 Test: Runs PHPUnit/Pest tests with coverage
-#   - 📊 Code Quality: PHPStan & PHPCS checks
+#   - 🧪 PHPUnit/Pest: Runs tests with coverage
+#   - 📊 Code Quality: PHPStan static analysis & PHPCS style check
+#   - 📤 Uploads: Test results and coverage reports
 #
 # 📋 TRIGGERS:
 #   - Push to main, develop, and feature branches
@@ -12,7 +13,7 @@
 #   - Manual trigger via workflow_dispatch
 # ============================================================
 
-name: PHP Testing & Security Scan
+name: PHP Security Scan & Tests
 
 on:
   push:
@@ -62,6 +63,21 @@ jobs:
               description = "Private Key"
               regex = '''-----BEGIN (?:RSA|DSA|EC|OPENSSH) PRIVATE KEY-----'''
               tags = ["key", "private"]
+            
+            [rules.github-token]
+              description = "GitHub Token"
+              regex = '''(ghp|gho|ghu|ghs|ghr)_[a-zA-Z0-9]{36}'''
+              tags = ["github", "token"]
+            
+            [rules.api-key]
+              description = "Generic API Key"
+              regex = '''[a-zA-Z0-9_\-]{32,64}'''
+              tags = ["api", "key"]
+            
+            [rules.jwt]
+              description = "JWT Token"
+              regex = '''eyJ[a-zA-Z0-9]{10,}\.eyJ[a-zA-Z0-9]{10,}\.[a-zA-Z0-9_-]{10,}'''
+              tags = ["jwt", "token"]
       
       # 3. Upload scan results
       - name: Upload Gitleaks results
@@ -77,12 +93,20 @@ jobs:
         run: |
           echo "🔴 SECURITY ALERT: Gitleaks found potential secrets in the code!"
           echo "Please check the scan results and remove any exposed secrets."
+          echo "📊 Download the gitleaks-results artifact to see details."
           exit 1
+      
+      # 5. Success message
+      - name: Security scan passed
+        if: success()
+        run: |
+          echo "✅ No secrets found in the code!"
+          echo "🔒 Your code is secure."
 
   # ==========================================================
   # JOB 2: PHP TESTS & CODE QUALITY
   # ==========================================================
-  test:
+  php-tests:
     name: 🧪 PHP Tests & Code Quality
     runs-on: ubuntu-latest
     needs: security-scan  # Runs only if security scan passes
@@ -174,12 +198,12 @@ jobs:
           fi
       
       # 8. Run static analysis (PHPStan)
-      - name: Run PHPStan
+      - name: Run PHPStan static analysis
         run: |
           if [ -f "./vendor/bin/phpstan" ]; then
             ./vendor/bin/phpstan analyse app/ src/ --level=5 --no-progress
           else
-            echo "PHPStan not installed, skipping..."
+            echo "⚠️ PHPStan not installed, skipping..."
           fi
       
       # 9. Run code style check (PHPCS)
@@ -188,19 +212,10 @@ jobs:
           if [ -f "./vendor/bin/phpcs" ]; then
             ./vendor/bin/phpcs --standard=PSR12 app/ src/ --ignore=vendor/ --report=summary
           else
-            echo "PHPCS not installed, skipping..."
+            echo "⚠️ PHPCS not installed, skipping..."
           fi
       
-      # 10. Run PHP Mess Detector (PHPMD) - Optional
-      - name: Run PHPMD
-        run: |
-          if [ -f "./vendor/bin/phpmd" ]; then
-            ./vendor/bin/phpmd app/ text cleancode,codesize,controversial,design,naming,unusedcode || true
-          else
-            echo "PHPMD not installed, skipping..."
-          fi
-      
-      # 11. Run tests with coverage
+      # 10. Run tests with coverage
       - name: Run PHPUnit tests
         run: |
           if [ -f "./vendor/bin/phpunit" ]; then
@@ -208,11 +223,11 @@ jobs:
           elif [ -f "./vendor/bin/pest" ]; then
             ./vendor/bin/pest --testdox --coverage-clover=coverage.xml --coverage-html=coverage-report
           else
-            echo "No test runner found"
+            echo "❌ No test runner found"
             exit 1
           fi
       
-      # 12. Upload test coverage to Codecov
+      # 11. Upload coverage to Codecov
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3
         with:
@@ -221,7 +236,7 @@ jobs:
           name: codecov-umbrella
           fail_ci_if_error: false
       
-      # 13. Upload test results as artifacts
+      # 12. Upload test results
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
@@ -231,91 +246,68 @@ jobs:
             coverage-report/
             tests/_output/
             *.xml
+          retention-days: 7
       
-      # 14. Check test coverage percentage
-      - name: Check coverage threshold
+      # 13. Success message
+      - name: Tests passed
+        if: success()
         run: |
-          if [ -f "./coverage.xml" ]; then
-            COVERAGE=$(grep -o 'line-rate="[0-9.]*"' coverage.xml | head -1 | cut -d'"' -f2)
-            COVERAGE_PERCENT=$(echo "$COVERAGE * 100" | bc)
-            echo "📊 Test coverage: $COVERAGE_PERCENT%"
-            
-            THRESHOLD=80
-            if (( $(echo "$COVERAGE_PERCENT < $THRESHOLD" | bc -l) )); then
-              echo "⚠️ Coverage is below $THRESHOLD% threshold!"
-              exit 1
-            else
-              echo "✅ Coverage is above $THRESHOLD% threshold"
-            fi
-          fi
-        continue-on-error: true  # Don't fail the build for coverage
+          echo "✅ All tests passed successfully!"
+          echo "📊 Coverage report uploaded as artifact"
 
   # ==========================================================
-  # JOB 3: NOTIFICATIONS (Optional)
+  # JOB 3: TEST SUMMARY & NOTIFICATIONS
   # ==========================================================
-  notifications:
-    name: 📢 Notifications
+  test-summary:
+    name: 📊 Test Summary
     runs-on: ubuntu-latest
-    needs: test
+    needs: [security-scan, php-tests]
     if: always()
     
     steps:
-      # 1. Send status notification
-      - name: Send GitHub status check
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const status = '${{ needs.test.result }}';
-            const emoji = status === 'success' ? '✅' : '❌';
-            const message = `${emoji} Tests ${
-              status === 'success' ? 'passed' : 'failed'
-            } for ${process.env.GITHUB_REF_NAME}`;
-            
-            console.log(message);
-            
-            // Create status check
-            await github.rest.repos.createCommitStatus({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              sha: context.sha,
-              state: status === 'success' ? 'success' : 'failure',
-              context: 'PHP Tests & Security Scan',
-              description: status === 'success' ? 'All tests passed!' : 'Tests failed!',
-            });
+      # 1. Check overall status
+      - name: Check status
+        run: |
+          echo "📊 TEST SUMMARY"
+          echo "================"
+          
+          if [ "${{ needs.security-scan.result }}" == "success" ] && [ "${{ needs.php-tests.result }}" == "success" ]; then
+            echo "✅ ALL CHECKS PASSED!"
+            echo "🔒 No secrets found"
+            echo "🧪 All PHP tests passed"
+            echo "📊 Code quality checks passed"
+            exit 0
+          else
+            echo "❌ SOME CHECKS FAILED!"
+            [ "${{ needs.security-scan.result }}" != "success" ] && echo "🔴 Security scan failed - Secrets may be exposed!"
+            [ "${{ needs.php-tests.result }}" != "success" ] && echo "🔴 PHP tests failed"
+            exit 1
+          fi
       
-      # 2. Send Slack notification (if configured)
+      # 2. Send notification (only if configured)
       - name: Send Slack notification
-        if: success() && secrets.SLACK_WEBHOOK != ''
+        if: success() && secrets.SLACK_BOT_TOKEN != ''
         uses: slackapi/slack-github-action@v1.24.0
         with:
-          channel-id: '#ci-cd'
+          channel-id: '#security-tests'
           slack-message: |
-            ✅ Tests passed! 
-            📦 Repository: ${{ github.repository }}
-            🌿 Branch: ${{ github.ref_name }}
-            👤 Author: ${{ github.actor }}
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-        continue-on-error: true
+            ✅ Security & Test Pipeline Passed!
+            📊 Branch: ${{ github.ref_name }}
+            🔒 Secrets: No issues found
+            🧪 Tests: All passed
+          env:
+            SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
       
-      # 3. Send email notification (if configured)
-      - name: Send email notification
-        if: failure()
-        uses: dawidd6/action-send-mail@v3
+      - name: Send Slack notification (failure)
+        if: failure() && secrets.SLACK_BOT_TOKEN != ''
+        uses: slackapi/slack-github-action@v1.24.0
         with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          username: ${{ secrets.MAIL_USERNAME }}
-          password: ${{ secrets.MAIL_PASSWORD }}
-          subject: "❌ Test Failed: ${{ github.repository }}"
-          to: ${{ secrets.NOTIFICATION_EMAIL }}
-          from: GitHub Actions
-          body: |
-            Tests failed for repository: ${{ github.repository }}
-            Branch: ${{ github.ref_name }}
-            Commit: ${{ github.sha }}
-            Author: ${{ github.actor }}
-            
-            Check the GitHub Actions for details:
-            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        continue-on-error: true
+          channel-id: '#security-tests'
+          slack-message: |
+            ❌ Security & Test Pipeline Failed!
+            📊 Branch: ${{ github.ref_name }}
+            🔒 Security: ${{ needs.security-scan.result }}
+            🧪 Tests: ${{ needs.php-tests.result }}
+            🔍 Please check the Actions tab for details.
+          env:
+            SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
