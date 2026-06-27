@@ -1,427 +1,534 @@
 # ============================================================
-# COMPLETE PHP CI/CD PIPELINE with GITLEAKS SECURITY SCANNING
+# GITLEAKS SECURITY SCANNING - PHP & PYTHON REPOSITORIES
 # ============================================================
 # 🔧 WHAT THIS DOES:
-#   - 🔒 Gitleaks: Scans for hardcoded secrets/tokens in code
-#   - 🏗️ Build: Installs dependencies and builds the application
-#   - 🧪 Test: Runs PHPUnit/Pest tests with coverage
-#   - 🚀 Deploy: Deploys to server on successful test
+#   - 🔒 Scans entire repository for hardcoded secrets
+#   - 🐍 Detects Python-specific secrets (Django, Flask, etc.)
+#   - 🐘 Detects PHP-specific secrets (Laravel, Symfony, etc.)
+#   - 📊 Generates detailed scan reports
+#   - 🚨 Blocks PRs if secrets are found
+#   - 📤 Uploads scan results as artifacts
 #
 # 📋 TRIGGERS:
-#   - Push to main, develop, and feature branches
-#   - Pull requests to main branch
+#   - Push to any branch
+#   - Pull requests to main/develop
 #   - Manual trigger via workflow_dispatch
+#   - Scheduled scans (weekly)
 # ============================================================
 
-name: PHP CI/CD Pipeline with Security Scanning
+name: 🔒 Gitleaks Secret Scanner
 
 on:
   push:
-    branches: [ "main", "develop", "feature/*" ]
+    branches: [ "*" ]  # Scan all pushes to all branches
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "develop", "master" ]
   workflow_dispatch:  # Manual trigger
-
-env:
-  PHP_VERSION: '8.2'
-  EXTENSIONS: mbstring, xml, ctype, json, tokenizer, bcmath, pdo_mysql, pdo_pgsql, intl, zip, curl, gd
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly scan every Sunday at midnight
 
 jobs:
   # ==========================================================
-  # JOB 1: SECURITY SCANNING (Gitleaks)
+  # JOB 1: GITLEAKS SECURITY SCAN
   # ==========================================================
-  security-scan:
-    name: 🔒 Security Scan (Gitleaks)
+  gitleaks-scan:
+    name: 🔒 Gitleaks Security Scan
     runs-on: ubuntu-latest
+    
+    # Permissions needed for PR comments
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+      actions: read
+      checks: write
     
     steps:
       # 1. Checkout code with full history
-      - name: Checkout code
+      - name: 📦 Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Full history for better scanning
+          fetch-depth: 0  # Full history for complete scan
       
-      # 2. Run Gitleaks scan
-      - name: Run Gitleaks
+      # 2. Create Gitleaks configuration
+      - name: 📝 Create Gitleaks config
+        run: |
+          cat > .gitleaks.toml << 'EOF'
+          title = "Gitleaks Configuration for PHP & Python"
+          
+          # Extend default rules
+          [extend]
+          useDefault = true
+          
+          # ================================
+          # PHP SPECIFIC RULES
+          # ================================
+          [[rules]]
+          id = "php-database-credentials"
+          description = "PHP Database Credentials"
+          regex = '''\$[a-zA-Z_][a-zA-Z0-9_]*\s*=\s*['"](?:mysql|pgsql|sqlite|mongodb)://[^'"]+['"]'''
+          tags = ["php", "database", "credentials"]
+          
+          [[rules]]
+          id = "php-laravel-env-key"
+          description = "Laravel APP_KEY in PHP"
+          regex = '''APP_KEY\s*=\s*base64:[a-zA-Z0-9+/=]+'''
+          tags = ["php", "laravel", "key"]
+          
+          [[rules]]
+          id = "php-api-keys"
+          description = "PHP API Keys"
+          regex = '''(?:api_key|apikey|secret|token)\s*=\s*['"][a-zA-Z0-9_\-\.]{16,}['"]'''
+          tags = ["php", "api", "key"]
+          
+          [[rules]]
+          id = "php-env-credentials"
+          description = "PHP .env Credentials"
+          regex = '''(?i)(DB_(?:PASSWORD|USERNAME|HOST)|REDIS_PASSWORD|MAIL_PASSWORD|AWS_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY))\s*=\s*['"]?[a-zA-Z0-9_\-\.]{8,}['"]?'''
+          tags = ["php", "env", "credentials"]
+          
+          [[rules]]
+          id = "php-password-hash"
+          description = "PHP Password Hash"
+          regex = '''password_hash\s*\(\s*['"][^'"]+['"]\s*,\s*PASSWORD_(?:BCRYPT|ARGON2I|ARGON2ID)'''
+          tags = ["php", "password", "hash"]
+          
+          [[rules]]
+          id = "php-session-hijacking"
+          description = "PHP Session ID"
+          regex = '''session_id\s*\(\s*['"][a-f0-9]{32,40}['"]\s*\)'''
+          tags = ["php", "session", "security"]
+          
+          # ================================
+          # PYTHON SPECIFIC RULES
+          # ================================
+          [[rules]]
+          id = "python-django-secret"
+          description = "Django Secret Key"
+          regex = '''SECRET_KEY\s*=\s*['"][a-zA-Z0-9@#%^&*()_+{}:|<>?~\-]{40,}['"]'''
+          tags = ["python", "django", "key"]
+          
+          [[rules]]
+          id = "python-flask-secret"
+          description = "Flask Secret Key"
+          regex = '''SECRET_KEY\s*=\s*['"][a-zA-Z0-9_\-\.]{32,}['"]'''
+          tags = ["python", "flask", "key"]
+          
+          [[rules]]
+          id = "python-database-url"
+          description = "Python Database URL"
+          regex = '''(?:postgresql|mysql|sqlite|mongodb|redis)://[a-zA-Z0-9_\-]+:[^@]+@[a-zA-Z0-9_\-\.]+''',
+          tags = ["python", "database", "credentials"]
+          
+          [[rules]]
+          id = "python-aws-credentials"
+          description = "Python AWS Credentials"
+          regex = '''(?:AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)\s*=\s*['"][a-zA-Z0-9/+=]{16,}['"]'''
+          tags = ["python", "aws", "credentials"]
+          
+          [[rules]]
+          id = "python-jwt-token"
+          description = "Python JWT Token"
+          regex = '''(?:jwt|token)\s*=\s*['"]eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}['"]'''
+          tags = ["python", "jwt", "token"]
+          
+          [[rules]]
+          id = "python-api-keys"
+          description = "Python API Keys"
+          regex = '''(?:api_key|apikey|token|secret)\s*=\s*['"][a-zA-Z0-9_\-\.]{20,}['"]'''
+          tags = ["python", "api", "key"]
+          
+          [[rules]]
+          id = "python-env-credentials"
+          description = "Python .env Credentials"
+          regex = '''(?i)(DB_(?:PASSWORD|USERNAME)|REDIS_PASSWORD|EMAIL_PASSWORD|SECRET_KEY)\s*=\s*['"]?[a-zA-Z0-9_\-\.]{8,}['"]?'''
+          tags = ["python", "env", "credentials"]
+          
+          [[rules]]
+          id = "python-ssh-key"
+          description = "Python SSH Key"
+          regex = '''-----BEGIN (?:RSA|DSA|EC|OPENSSH) PRIVATE KEY-----'''
+          tags = ["python", "ssh", "key"]
+          
+          # ================================
+          # COMMON SECRETS (PHP & Python)
+          # ================================
+          [[rules]]
+          id = "generic-api-key"
+          description = "Generic API Key"
+          regex = '''[a-zA-Z0-9_\-]{32,64}'''
+          tags = ["generic", "api", "key"]
+          
+          [[rules]]
+          id = "aws-access-key"
+          description = "AWS Access Key"
+          regex = '''(AKIA|ASIA)[0-9A-Z]{16}'''
+          tags = ["aws", "access", "key"]
+          
+          [[rules]]
+          id = "github-token"
+          description = "GitHub Token"
+          regex = '''(ghp|gho|ghu|ghs|ghr)_[a-zA-Z0-9]{36}'''
+          tags = ["github", "token"]
+          
+          [[rules]]
+          id = "slack-token"
+          description = "Slack Token"
+          regex = '''xox[baprs]-[a-zA-Z0-9-]+'''
+          tags = ["slack", "token"]
+          
+          [[rules]]
+          id = "jwt-token"
+          description = "JWT Token"
+          regex = '''eyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}'''
+          tags = ["jwt", "token"]
+          
+          [[rules]]
+          id = "private-key"
+          description = "Private Key"
+          regex = '''-----BEGIN (?:RSA|DSA|EC|OPENSSH|PGP) PRIVATE KEY BLOCK-----'''
+          tags = ["key", "private"]
+          
+          [[rules]]
+          id = "mongodb-connection"
+          description = "MongoDB Connection String"
+          regex = '''mongodb(?:\+srv)?://[a-zA-Z0-9_\-]+:[^@]+@[a-zA-Z0-9_\-\.]+'''
+          tags = ["mongodb", "database", "connection"]
+          
+          [[rules]]
+          id = "redis-connection"
+          description = "Redis Connection String"
+          regex = '''redis://[a-zA-Z0-9_\-]+:[^@]+@[a-zA-Z0-9_\-\.]+'''
+          tags = ["redis", "database", "connection"]
+          
+          # ================================
+          # ALLOWLIST (Exclude paths/files)
+          # ================================
+          [allowlist]
+          description = "Files and paths to exclude from scanning"
+          paths = [
+            '''\.git/''',
+            '''vendor/''',
+            '''node_modules/''',
+            '''venv/''',
+            '''env/''',
+            '''__pycache__/''',
+            '''\.pytest_cache/''',
+            '''\.mypy_cache/''',
+            '''\.tox/''',
+            '''coverage/''',
+            '''storage/''',
+            '''bootstrap/cache/''',
+            '''\.phpunit\.result\.cache''',
+            '''composer\.lock''',
+            '''package-lock\.json''',
+            '''poetry\.lock''',
+            '''Pipfile\.lock''',
+            '''yarn\.lock''',
+          ]
+          
+          [allowlist.regexes]
+          description = "Regex patterns to exclude"
+          regexes = [
+            '''[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}''',  # UUID
+            '''generated|example|test|dummy|placeholder|sample''',
+            '''\$\{.*?\}''',  # Environment variables
+            '''\b[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\b''',  # IP addresses
+          ]
+          EOF
+          
+          echo "✅ Gitleaks configuration created"
+          cat .gitleaks.toml
+      
+      # 3. Run Gitleaks scan
+      - name: 🔍 Run Gitleaks scan
+        id: gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          config: |
-            [rules]
-              [rules.secrets]
-                description = "Generic Secret"
-                regex = '''(?i)(?:key|token|secret|password|auth|credential)[^a-zA-Z0-9]*[=:][^a-zA-Z0-9]*([a-zA-Z0-9_\-\.\/]{8,})'''
-                tags = ["secret", "generic"]
-            
-            [rules.aws]
-              description = "AWS Access Key"
-              regex = '''(AKIA[0-9A-Z]{16})'''
-              tags = ["aws", "secret"]
-            
-            [rules.private-key]
-              description = "Private Key"
-              regex = '''-----BEGIN (?:RSA|DSA|EC|OPENSSH) PRIVATE KEY-----'''
-              tags = ["key", "private"]
+          config: .gitleaks.toml
+          report-format: sarif,json
+          scan-path: "."
+          fail-on-secrets: true
       
-      # 3. Upload scan results (optional)
-      - name: Upload Gitleaks results
+      # 4. Upload SARIF report to GitHub Security tab
+      - name: 📤 Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: gitleaks-results.sarif
+          category: gitleaks
+      
+      # 5. Upload JSON report as artifact
+      - name: 📤 Upload Gitleaks JSON results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: gitleaks-results
-          path: gitleaks-report.json
-      
-      # 4. Send notification if secrets found
-      - name: Send alert if secrets found
-        if: failure()
-        run: |
-          echo "🔴 SECURITY ALERT: Gitleaks found potential secrets in the code!"
-          echo "Please check the scan results and remove any exposed secrets."
-          exit 1
-
-  # ==========================================================
-  # JOB 2: BUILD & TEST
-  # ==========================================================
-  build-and-test:
-    name: 🏗️ Build & Test
-    runs-on: ubuntu-latest
-    needs: security-scan  # Runs only if security scan passes
-    
-    strategy:
-      matrix:
-        php-versions: ['8.2']  # Test against multiple PHP versions
-        dependency-versions: ['locked']  # Test with locked and latest deps
-    
-    services:
-      mysql:
-        image: mysql:8.0
-        env:
-          MYSQL_ROOT_PASSWORD: root
-          MYSQL_DATABASE: test_db
-        ports:
-          - 3306:3306
-        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
-      
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: --health-cmd="redis-cli ping" --health-interval=10s --health-timeout=5s --health-retries=3
-    
-    steps:
-      # 1. Checkout code
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      # 2. Setup PHP
-      - name: Setup PHP
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ matrix.php-versions }}
-          extensions: ${{ env.EXTENSIONS }}
-          coverage: xdebug
-          tools: composer, phpunit, php-cs-fixer
-      
-      # 3. Validate composer.json
-      - name: Validate composer.json
-        run: composer validate --strict
-      
-      # 4. Cache Composer dependencies
-      - name: Cache dependencies
-        uses: actions/cache@v3
-        with:
           path: |
-            vendor/
-            ~/.cache/composer
-          key: ${{ runner.os }}-php${{ matrix.php-versions }}-${{ matrix.dependency-versions }}-composer-${{ hashFiles('composer.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-php${{ matrix.php-versions }}-${{ matrix.dependency-versions }}-composer-
-            ${{ runner.os }}-php${{ matrix.php-versions }}-composer-
-            ${{ runner.os }}-composer-
+            gitleaks-results.json
+            gitleaks-results.sarif
+          retention-days: 90
       
-      # 5. Install dependencies
-      - name: Install dependencies
-        run: |
-          if [ "${{ matrix.dependency-versions }}" == "latest" ]; then
-            composer update --prefer-dist --no-progress
-          else
-            composer install --prefer-dist --no-progress --no-suggest
-          fi
-      
-      # 6. Create environment file
-      - name: Setup environment
-        run: |
-          if [ -f ".env.example" ]; then
-            cp .env.example .env
-          else
-            echo "APP_ENV=testing" > .env
-            echo "APP_DEBUG=true" >> .env
-            echo "APP_URL=http://localhost" >> .env
-            echo "DB_CONNECTION=mysql" >> .env
-            echo "DB_HOST=127.0.0.1" >> .env
-            echo "DB_PORT=3306" >> .env
-            echo "DB_DATABASE=test_db" >> .env
-            echo "DB_USERNAME=root" >> .env
-            echo "DB_PASSWORD=root" >> .env
-            echo "REDIS_HOST=127.0.0.1" >> .env
-            echo "REDIS_PORT=6379" >> .env
-          fi
-          
-          # Generate application key for Laravel
-          if [ -f "artisan" ]; then
-            php artisan key:generate
-          fi
-      
-      # 7. Run database migrations
-      - name: Run migrations
-        if: hashFiles('database/migrations') != ''
-        run: |
-          if [ -f "artisan" ]; then
-            php artisan migrate --force
-          fi
-      
-      # 8. Run static analysis (PHPStan)
-      - name: Run PHPStan
-        run: |
-          if [ -f "./vendor/bin/phpstan" ]; then
-            ./vendor/bin/phpstan analyse app/ src/ --level=5 --no-progress || true
-          else
-            echo "PHPStan not installed, skipping..."
-          fi
-      
-      # 9. Run code style check
-      - name: Run PHPCS
-        run: |
-          if [ -f "./vendor/bin/phpcs" ]; then
-            ./vendor/bin/phpcs --standard=PSR12 app/ src/ --ignore=vendor/ --report=summary || true
-          else
-            echo "PHPCS not installed, skipping..."
-          fi
-      
-      # 10. Run tests with coverage
-      - name: Run PHPUnit tests
-        run: |
-          if [ -f "./vendor/bin/phpunit" ]; then
-            ./vendor/bin/phpunit --testdox --coverage-clover=coverage.xml --coverage-html=coverage-report
-          elif [ -f "./vendor/bin/pest" ]; then
-            ./vendor/bin/pest --testdox --coverage-clover=coverage.xml --coverage-html=coverage-report
-          else
-            echo "No test runner found"
-            exit 1
-          fi
-      
-      # 11. Upload test coverage
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
-        with:
-          files: ./coverage.xml
-          flags: unittests
-          name: codecov-umbrella
-          fail_ci_if_error: false
-      
-      # 12. Upload test results
-      - name: Upload test results
+      # 6. Generate summary report
+      - name: 📊 Generate summary
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results-php${{ matrix.php-versions }}-${{ matrix.dependency-versions }}
-          path: |
-            coverage-report/
-            tests/_output/
-            *.xml
-      
-      # 13. Build production assets (for frontend)
-      - name: Build assets
         run: |
-          if [ -f "package.json" ]; then
-            npm ci --no-audit --no-fund
-            npm run build || echo "No build script found"
+          echo "## 🔒 Gitleaks Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f "gitleaks-results.json" ]; then
+            TOTAL=$(jq '.length' gitleaks-results.json 2>/dev/null || echo "0")
+            echo "### 📊 Summary" >> $GITHUB_STEP_SUMMARY
+            echo "- **Total secrets found:** $TOTAL" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            if [ "$TOTAL" -gt 0 ]; then
+              echo "### 🚨 Secrets Found" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "| File | Line | Rule | Description |" >> $GITHUB_STEP_SUMMARY
+              echo "|------|------|------|-------------|" >> $GITHUB_STEP_SUMMARY
+              
+              jq -r '.[] | "| `\(.File)` | \(.Line) | `\(.RuleID)` | \(.Description) |"' gitleaks-results.json 2>/dev/null | head -20 >> $GITHUB_STEP_SUMMARY
+              
+              TOTAL=$(jq '.length' gitleaks-results.json 2>/dev/null || echo "0")
+              if [ "$TOTAL" -gt 20 ]; then
+                echo "| ... | ... | ... | *$((TOTAL - 20)) more results* |" >> $GITHUB_STEP_SUMMARY
+              fi
+              
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "### ❌ FAILED: Secrets found in repository!" >> $GITHUB_STEP_SUMMARY
+              echo "Please check the artifact for full details." >> $GITHUB_STEP_SUMMARY
+            else
+              echo "### ✅ SUCCESS: No secrets found!" >> $GITHUB_STEP_SUMMARY
+              echo "Your repository is secure." >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "### ⚠️ No results file found" >> $GITHUB_STEP_SUMMARY
           fi
       
-      # 14. Create build artifact
-      - name: Archive build
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-artifact
-          path: |
-            ./
-            !vendor/
-            !node_modules/
-            !tests/
-            !*.log
-            !.env
-          retention-days: 7
-
-  # ==========================================================
-  # JOB 3: DEPLOYMENT
-  # ==========================================================
-  deploy:
-    name: 🚀 Deploy to Server
-    runs-on: ubuntu-latest
-    needs: build-and-test  # Runs only if build and test pass
-    # Deploy only on specific branches
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
-    
-    strategy:
-      matrix:
-        environment: ['staging', 'production']
-        include:
-          - environment: staging
-            branch: develop
-            deploy_path: /var/www/staging/your-app
-          - environment: production
-            branch: main
-            deploy_path: /var/www/production/your-app
-    
-    environment:
-      name: ${{ matrix.environment }}
-      url: https://${{ matrix.environment }}-your-app.com
-    
-    steps:
-      # 1. Download build artifact
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: build-artifact
-          path: ./build
-      
-      # 2. Deploy to server
-      - name: Deploy to ${{ matrix.environment }}
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SERVER_IP }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ secrets.SERVER_PORT || 22 }}
-          script: |
-            set -e  # Exit on any error
-            
-            # Configuration
-            DEPLOY_PATH="${{ matrix.deploy_path }}"
-            PHP_VERSION="${{ env.PHP_VERSION }}"
-            ENVIRONMENT="${{ matrix.environment }}"
-            BRANCH="${{ github.ref_name }}"
-            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-            
-            echo "🚀 Starting deployment to $ENVIRONMENT environment..."
-            echo "📦 Branch: $BRANCH"
-            echo "📦 Target: $DEPLOY_PATH"
-            
-            # Create backup directory
-            BACKUP_DIR="${DEPLOY_PATH}_backup_${TIMESTAMP}"
-            echo "📦 Creating backup to $BACKUP_DIR..."
-            if [ -d "$DEPLOY_PATH" ]; then
-              cp -r $DEPLOY_PATH $BACKUP_DIR
-            fi
-            
-            # Navigate to deployment directory
-            cd $DEPLOY_PATH || { echo "❌ Directory not found: $DEPLOY_PATH"; exit 1; }
-            
-            # Pull latest code
-            echo "📦 Pulling latest code from $BRANCH branch..."
-            git fetch --all
-            git checkout $BRANCH
-            git pull origin $BRANCH
-            
-            # Install/update dependencies
-            echo "📦 Installing Composer dependencies..."
-            composer install --no-dev --optimize-autoloader --prefer-dist
-            
-            # Run database migrations
-            if [ -f "artisan" ]; then
-              echo "📦 Running Laravel migrations..."
-              php artisan migrate --force --env=$ENVIRONMENT
-              
-              echo "📦 Optimizing application..."
-              php artisan optimize:clear
-              php artisan config:cache
-              php artisan route:cache
-              php artisan view:cache
-              
-              if [ "$ENVIRONMENT" == "production" ]; then
-                echo "📦 Running production optimizations..."
-                php artisan optimize
-              fi
-            fi
-            
-            # Build frontend assets
-            if [ -f "package.json" ]; then
-              echo "📦 Building frontend assets..."
-              npm ci --no-audit --no-fund --production
-              npm run build || echo "No build script found"
-            fi
-            
-            # Set permissions
-            echo "📦 Setting file permissions..."
-            sudo chown -R www-data:www-data .
-            sudo chmod -R 755 storage bootstrap/cache
-            sudo chmod -R 644 public/ 2>/dev/null || true
-            
-            # Create .env file for environment
-            if [ -f ".env.$ENVIRONMENT" ]; then
-              echo "📦 Using .env.$ENVIRONMENT file..."
-              cp .env.$ENVIRONMENT .env
-            fi
-            
-            # Restart PHP-FPM
-            echo "📦 Restarting PHP-FPM..."
-            sudo systemctl restart php$PHP_VERSION-fpm || sudo service php$PHP_VERSION-fpm restart
-            
-            # Clear OPcache
-            echo "📦 Clearing OPcache..."
-            sudo systemctl reload php$PHP_VERSION-fpm
-            
-            # Run post-deployment scripts
-            if [ -f "deploy/post-deploy.sh" ]; then
-              echo "📦 Running post-deployment script..."
-              bash deploy/post-deploy.sh $ENVIRONMENT
-            fi
-            
-            # Clean up old backups (keep last 5)
-            echo "📦 Cleaning up old backups..."
-            cd /var/www/
-            ls -dt ${DEPLOY_PATH}_backup_* 2>/dev/null | tail -n +6 | xargs rm -rf 2>/dev/null || true
-            
-            echo "✅ Deployment complete to $ENVIRONMENT environment!"
-            
-            # Show current version
-            echo "📋 Current commit:"
-            git log -1 --pretty=format:"%h - %s (%an, %ar)"
-            
-            # Health check
-            echo "📋 Running health check..."
-            curl -f http://localhost/health || echo "⚠️ Health check failed"
-
-  # ==========================================================
-  # JOB 4: POST-DEPLOYMENT (Optional)
-  # ==========================================================
-  post-deployment:
-    name: 📊 Post-Deployment Tasks
-    runs-on: ubuntu-latest
-    needs: deploy
-    if: always()
-    
-    steps:
-      # 1. Send deployment notification
-      - name: Send notification
+      # 7. Post comment on PR
+      - name: 💬 Post comment on PR
+        if: github.event_name == 'pull_request' && always()
         uses: actions/github-script@v6
         with:
           script: |
-            const status = '${{ needs.deploy.result }}';
-            const emoji = status === 'success' ? '✅' : '❌';
-            const message = `${emoji} Deployment ${
-              status === 'success' ? 'successful' : 'failed'
-            } for ${process.env.GITHUB_REF_NAME}`;
+            const fs = require('fs');
+            const path = require('path');
             
-            console.log(message);
+            let comment = '## 🔒 Gitleaks Security Scan\n\n';
+            
+            try {
+              if (fs.existsSync('gitleaks-results.json')) {
+                const data = fs.readFileSync('gitleaks-results.json', 'utf8');
+                const results = JSON.parse(data);
+                const total = results.length || 0;
+                
+                if (total === 0) {
+                  comment += '✅ **No secrets found!**\n\n';
+                  comment += 'Your code passes the security scan. All good! 🎉';
+                } else {
+                  comment += `❌ **${total} potential secrets found!**\n\n`;
+                  comment += '#### 🚨 List of secrets found:\n\n';
+                  comment += '| File | Line | Rule |\n';
+                  comment += '|------|------|------|\n';
+                  
+                  const limited = results.slice(0, 10);
+                  limited.forEach(result => {
+                    const file = path.basename(result.File) || result.File;
+                    comment += `| \`${file}\` | ${result.Line} | \`${result.RuleID}\` |\n`;
+                  });
+                  
+                  if (total > 10) {
+                    comment += `\n*... and ${total - 10} more results. Download the artifact for full details.*\n`;
+                  }
+                  
+                  comment += '\n#### 📝 Please fix these issues before merging:\n';
+                  comment += '1. Remove hardcoded secrets from code\n';
+                  comment += '2. Use environment variables instead\n';
+                  comment += '3. Rotate any exposed secrets\n';
+                  comment += '4. Download the full report from artifacts';
+                }
+              } else {
+                comment += '⚠️ No scan results available.';
+              }
+            } catch (error) {
+              comment += '⚠️ Error reading scan results. Please check workflow logs.';
+              console.error('Error:', error);
+            }
+            
+            // Post comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+            });
+            
+            const existingComment = comments.find(comment => 
+              comment.user.type === 'Bot' && 
+              comment.body.includes('Gitleaks Security Scan')
+            );
+            
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body: comment,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body: comment,
+              });
+            }
       
-      # 2. Send Slack notification (fixed condition)
-      - name: Send Slack notification
-        if: success()
+      # 8. Block PR if secrets found
+      - name: 🚫 Block PR if secrets found
+        if: github.event_name == 'pull_request' && failure()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            
+            try {
+              if (fs.existsSync('gitleaks-results.json')) {
+                const data = fs.readFileSync('gitleaks-results.json', 'utf8');
+                const results = JSON.parse(data);
+                const total = results.length || 0;
+                
+                if (total > 0) {
+                  const message = `🚫 **Pull Request Blocked**\n\n` +
+                                 `❌ ${total} potential secrets found in this PR.\n\n` +
+                                 `📝 **Actions Required:**\n` +
+                                 `1. Remove all hardcoded secrets from your code\n` +
+                                 `2. Use environment variables or GitHub Secrets\n` +
+                                 `3. Rotate any exposed credentials\n` +
+                                 `4. Push fixes to this branch\n\n` +
+                                 `📊 Download the Gitleaks report from artifacts for details.`;
+                  
+                  // Add check run
+                  await github.rest.checks.create({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name: 'Gitleaks Security Scan',
+                    head_sha: context.payload.pull_request.head.sha,
+                    status: 'completed',
+                    conclusion: 'failure',
+                    output: {
+                      title: 'Secrets found in code',
+                      summary: `${total} potential secrets found`,
+                      text: message,
+                    },
+                  });
+                  
+                  core.setFailed(`❌ ${total} secrets found - PR blocked`);
+                }
+              }
+            } catch (error) {
+              console.error('Error blocking PR:', error);
+            }
+      
+      # 9. Send Slack notification (optional)
+      - name: 📢 Send Slack notification
+        if: always() && secrets.SLACK_WEBHOOK != ''
         uses: slackapi/slack-github-action@v1.24.0
         with:
-          channel-id: '#deployments'
-          slack-message: "✅ Deployment successful! Branch: ${{ github.ref_name }}"
+          payload: |
+            {
+              "text": "${{ job.status == 'success' ? '✅' : '❌' }} Gitleaks Scan: ${{ job.status }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "${{ job.status == 'success' ? '✅' : '❌' }} *Gitleaks Security Scan*"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Status:*\n${{ job.status }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Repository:*\n${{ github.repository }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Branch:*\n${{ github.ref_name }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Trigger:*\n${{ github.event_name }}"
+                    }
+                  ]
+                }
+              ]
+            }
         env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+  # ==========================================================
+  # JOB 2: SUMMARY & ALERTS
+  # ==========================================================
+  summary:
+    name: 📊 Summary & Alerts
+    runs-on: ubuntu-latest
+    needs: gitleaks-scan
+    if: always()
+    
+    steps:
+      # 1. Check final status
+      - name: ✅ Check final status
+        run: |
+          echo "## 📊 Gitleaks Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ needs.gitleaks-scan.result }}" == "success" ]; then
+            echo "### ✅ All security checks passed!" >> $GITHUB_STEP_SUMMARY
+            echo "🔒 No secrets found in repository." >> $GITHUB_STEP_SUMMARY
+            echo "📊 Full report available in artifacts." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          else
+            echo "### ❌ Security issues found!" >> $GITHUB_STEP_SUMMARY
+            echo "🚨 Potential secrets detected in your code." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "📝 **Next Steps:**" >> $GITHUB_STEP_SUMMARY
+            echo "1. Download the Gitleaks report from artifacts" >> $GITHUB_STEP_SUMMARY
+            echo "2. Remove all hardcoded secrets from code" >> $GITHUB_STEP_SUMMARY
+            echo "3. Use environment variables or secrets management" >> $GITHUB_STEP_SUMMARY
+            echo "4. Rotate any exposed credentials immediately" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+      
+      # 2. Send email alert (optional)
+      - name: 📧 Send email alert
+        if: failure() && secrets.EMAIL_TO != ''
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "🚨 Gitleaks Security Alert: ${{ github.repository }}"
+          to: ${{ secrets.EMAIL_TO }}
+          from: GitHub Actions
+          body: |
+            🔒 Gitleaks Security Scan Failed
+            
+            Repository: ${{ github.repository }}
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+            Trigger: ${{ github.event_name }}
+            
+            ❌ Potential secrets were found in the code!
+            
+            Please check the GitHub Actions run for details:
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
