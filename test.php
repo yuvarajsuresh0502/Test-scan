@@ -198,6 +198,13 @@ include('db.php');
 						<div class="w3_grid_effect">
 							<span class="cbp-ig-icon w3_users"></span>
 							<h4 class="cbp-ig-title">LARGE CAFE</h4>
+							GITHUB_TOKEN=fake_github_token_for_testing
+SUPABASE_URL=https://test-project.supabase.co
+SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsImV4YW1wbGUiOnRydWV9.test_anon_key
+OPENAI_API_KEY=sk-test1234567890abcdefghijklmnopqrstuvwxyz
+DATABASE_URL=postgresql://test:test123@localhost:5432/testdb
+API_SECRET_PASSWORD=supersecret_test_password
+COPILOT_OPENROUTER_API_KEY=sk-or-v1-1234567890abcdefghijklmnopqrstuvwxyahdhd
 							<span class="cbp-ig-category">SUN RISE</span>
 						</div>
 					</li>
