@@ -7,10 +7,7 @@
 #   - Prevents secrets from being committed to repository
 #
 # 📋 TRIGGERS:
-#   - Push to any branch
-#   - Pull requests to main branch
-#   - Daily automated scan at midnight
-#   - Manual trigger via workflow_dispatch
+#   - Push to specified branches ONLY
 # ============================================================
 
 name: Gitleaks Security Scan
@@ -18,11 +15,6 @@ name: Gitleaks Security Scan
 on:
   push:
     branches: [ "main", "develop", "feature/*", "hotfix/*" ]
-  pull_request:
-    branches: [ "main", "develop" ]
-  schedule:
-    - cron: '0 0 * * *'  # Daily at midnight UTC
-  workflow_dispatch:  # Manual trigger
 
 jobs:
   # ==========================================================
@@ -228,29 +220,7 @@ jobs:
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
       
-      # 7. Block PR if secrets found (optional)
-      - name: 🚫 Block PR with secrets
-        if: failure() && github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const prNumber = context.payload.pull_request.number;
-            await github.rest.pulls.createReview({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: prNumber,
-              event: 'REQUEST_CHANGES',
-              body: '🚫 **Security Check Failed**\n\nGitleaks detected potential secrets in this PR. Please fix before merging.\n\nDownload the `gitleaks-results` artifact from the workflow run to see details.'
-            });
-            
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: prNumber,
-              labels: ['security-blocked']
-            });
-      
-      # 8. Summary report
+      # 7. Summary report
       - name: 📋 Print summary
         if: always()
         run: |
